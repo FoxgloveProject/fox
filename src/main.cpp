@@ -9,6 +9,11 @@
 #include <sstream>
 #include <chrono>
 #include <thread>
+#include <cstdlib>
+#include <cstring>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <pwd.h>
 //Added this include
 #include "CLI/CLI.hpp"
 
@@ -30,11 +35,17 @@ std::set<std::string> installed_packages;
 // Helper function declarations
 void initialize_package_database();
 bool check_dependencies(const std::vector<std::string>& dependencies);
-void simulate_download(const std::string& package_name);
-void simulate_install(const std::string& package_name);
-void simulate_remove(const std::string& package_name);
+bool download_package(const std::string& package_name);
+bool install_package(const std::string& package_name);
+bool remove_package(const std::string& package_name);
 std::vector<Package> search_packages(const std::string& query);
 void display_package_info(const Package& pkg);
+bool load_installed_packages();
+void save_installed_packages();
+bool extract_package(const std::string& package_path, const std::string& extract_path);
+bool create_package_directories();
+std::string get_package_cache_dir();
+std::string get_package_install_dir();
 
 // Command handler function declarations
 void handle_install(const std::vector<std::string>& package_names);
@@ -101,29 +112,145 @@ bool check_dependencies(const std::vector<std::string>& dependencies) {
     return true;
 }
 
-void simulate_download(const std::string& package_name) {
+std::string get_package_cache_dir() {
+    const char* home = getenv("HOME");
+    if (!home) {
+        struct passwd* pw = getpwuid(getuid());
+        home = pw ? pw->pw_dir : "/tmp";
+    }
+    return std::string(home) + "/.fox/cache";
+}
+
+std::string get_package_install_dir() {
+    const char* home = getenv("HOME");
+    if (!home) {
+        struct passwd* pw = getpwuid(getuid());
+        home = pw ? pw->pw_dir : "/tmp";
+    }
+    return std::string(home) + "/.fox/packages";
+}
+
+bool create_package_directories() {
+    std::filesystem::create_directories(get_package_cache_dir());
+    std::filesystem::create_directories(get_package_install_dir());
+    return true;
+}
+
+bool download_package(const std::string& package_name) {
     std::cout << "Downloading " << package_name << "... ";
     std::cout.flush();
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
+    std::string cache_dir = get_package_cache_dir();
+    std::string package_file = cache_dir + "/" + package_name + ".fox";
+    
+    // In a real implementation, this would download from a repository
+    // For now, we'll create a dummy package file for demonstration
+    std::ofstream dummy_package(package_file, std::ios::binary);
+    if (!dummy_package) {
+        std::cout << "failed (cannot create package file)" << std::endl;
+        return false;
+    }
+    
+    // Create a simple tar.xz-like structure (simplified)
+    dummy_package << "FOX_PACKAGE_" << package_name << "_" << package_database[package_name].version;
+    dummy_package.close();
+    
     std::cout << "done." << std::endl;
+    return true;
 }
 
-void simulate_install(const std::string& package_name) {
+bool extract_package(const std::string& package_path, const std::string& extract_path) {
+    // In a real implementation, this would extract tar.xz
+    // For now, we'll simulate extraction by creating directories
+    std::filesystem::create_directories(extract_path);
+    
+    // Create some dummy files to simulate package contents
+    std::ofstream((extract_path + "/bin/" + std::filesystem::path(package_path).stem().string()).c_str());
+    std::ofstream((extract_path + "/lib/lib" + std::filesystem::path(package_path).stem().string() + ".so").c_str());
+    
+    return true;
+}
+
+bool install_package(const std::string& package_name) {
     std::cout << "Installing " << package_name << "... ";
     std::cout.flush();
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    std::cout << "done." << std::endl;
+    
+    std::string cache_dir = get_package_cache_dir();
+    std::string install_dir = get_package_install_dir();
+    std::string package_file = cache_dir + "/" + package_name + ".fox";
+    std::string package_install_path = install_dir + "/" + package_name;
+    
+    // Extract package
+    if (!extract_package(package_file, package_install_path)) {
+        std::cout << "failed (extraction error)" << std::endl;
+        return false;
+    }
+    
+    // Set proper permissions
+    std::filesystem::permissions(package_install_path, 
+                                std::filesystem::perms::owner_all | std::filesystem::perms::group_read | std::filesystem::perms::others_read,
+                                std::filesystem::perm_options::replace);
+    
     installed_packages.insert(package_name);
     package_database[package_name].installed = true;
+    save_installed_packages();
+    
+    std::cout << "done." << std::endl;
+    return true;
 }
 
-void simulate_remove(const std::string& package_name) {
+bool remove_package(const std::string& package_name) {
     std::cout << "Removing " << package_name << "... ";
     std::cout.flush();
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    std::cout << "done." << std::endl;
+    
+    std::string install_dir = get_package_install_dir();
+    std::string package_path = install_dir + "/" + package_name;
+    
+    // Remove package files
+    if (std::filesystem::exists(package_path)) {
+        std::filesystem::remove_all(package_path);
+    }
+    
     installed_packages.erase(package_name);
     package_database[package_name].installed = false;
+    save_installed_packages();
+    
+    std::cout << "done." << std::endl;
+    return true;
+}
+
+bool load_installed_packages() {
+    std::string cache_dir = get_package_cache_dir();
+    std::string installed_file = cache_dir + "/installed.txt";
+    
+    std::ifstream file(installed_file);
+    if (file.is_open()) {
+        std::string line;
+        while (std::getline(file, line)) {
+            if (!line.empty()) {
+                installed_packages.insert(line);
+                if (package_database.find(line) != package_database.end()) {
+                    package_database[line].installed = true;
+                }
+            }
+        }
+        file.close();
+    }
+    return true;
+}
+
+void save_installed_packages() {
+    std::string cache_dir = get_package_cache_dir();
+    std::filesystem::create_directories(cache_dir);
+    std::string installed_file = cache_dir + "/installed.txt";
+    
+    std::ofstream file(installed_file);
+    if (file.is_open()) {
+        for (const auto& pkg : installed_packages) {
+            file << pkg << std::endl;
+        }
+        file.close();
+    }
 }
 
 std::vector<Package> search_packages(const std::string& query) {
@@ -147,6 +274,9 @@ void display_package_info(const Package& pkg) {
 
 void handle_install(const std::vector<std::string>& package_names) {
     initialize_package_database();
+    load_installed_packages();
+    create_package_directories();
+    
     for(const auto& pkg : package_names) {
         if (package_database.find(pkg) == package_database.end()) {
             std::cout << "Package not found: " << pkg << std::endl;
@@ -161,13 +291,21 @@ void handle_install(const std::vector<std::string>& package_names) {
             std::cout << "Cannot install " << pkg << " due to missing dependencies." << std::endl;
             continue;
         }
-        simulate_download(pkg);
-        simulate_install(pkg);
+        if (!download_package(pkg)) {
+            std::cout << "Failed to download " << pkg << std::endl;
+            continue;
+        }
+        if (!install_package(pkg)) {
+            std::cout << "Failed to install " << pkg << std::endl;
+            continue;
+        }
     }
 }
 
 void handle_remove(const std::vector<std::string>& package_names) {
     initialize_package_database();
+    load_installed_packages();
+    
     for(const auto& pkg : package_names) {
         if (package_database.find(pkg) == package_database.end()) {
             std::cout << "Package not found: " << pkg << std::endl;
@@ -187,12 +325,15 @@ void handle_remove(const std::vector<std::string>& package_names) {
             }
         }
         if (is_dependency) continue;
-        simulate_remove(pkg);
+        if (!remove_package(pkg)) {
+            std::cout << "Failed to remove " << pkg << std::endl;
+        }
     }
 }
 
 void handle_search(const std::string& query) {
     initialize_package_database();
+    load_installed_packages();
     auto results = search_packages(query);
     if (results.empty()) {
         std::cout << "No packages found matching '" << query << "'." << std::endl;
