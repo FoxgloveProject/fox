@@ -299,10 +299,9 @@ bool run_command(const std::string& cmd) {
     return (ret == 0);
 }
 
-bool real_download_package(const std::string& package_name, const std::string& url_base) {
+bool real_download_package(const std::string& package_name, const std::string& url) {
     std::string cache_dir = get_package_cache_dir();
     std::string package_file = cache_dir + "/" + package_name + ".fox";
-    std::string url = url_base + "/" + package_name + ".fox";
     std::cout << "Downloading " << url << "... ";
     std::cout.flush();
     std::string cmd = "curl -fsSL -o '" + package_file + "' '" + url + "'";
@@ -328,7 +327,7 @@ bool parse_fox_json(const std::string& extract_dir, json& fox_meta) {
     return true;
 }
 
-bool real_install_package(const std::string& package_name, const std::string& url_base) {
+bool real_install_package(const std::string& package_name, const std::string& url) {
     std::string cache_dir = get_package_cache_dir();
     std::string package_file = cache_dir + "/" + package_name + ".fox";
     std::string extract_dir = get_temp_extract_dir();
@@ -368,7 +367,7 @@ bool real_install_package(const std::string& package_name, const std::string& ur
 // Path to the package database (repo.json)
 std::string get_repo_db_path() {
     // For now, use the project root; in production, use ~/.fox/repo.json
-    return "repo.json";
+    return std::string(getenv("HOME")) + "/.fox/repo.json";
 }
 
 // Global package database loaded from repo.json
@@ -418,11 +417,11 @@ void handle_install(const std::vector<std::string>& package_names) {
             std::cout << "No download URL for " << pkg << std::endl;
             continue;
         }
-        if (!real_download_package(pkg, url.substr(0, url.find_last_of('/')))) {
+        if (!real_download_package(pkg, url)) {
             std::cout << "Failed to download " << pkg << std::endl;
             continue;
         }
-        if (!real_install_package(pkg, url.substr(0, url.find_last_of('/')))) {
+        if (!real_install_package(pkg, url)) {
             std::cout << "Failed to install " << pkg << std::endl;
             continue;
         }
@@ -495,42 +494,51 @@ void handle_install_local(const std::string& package_file) {
 }
 
 void handle_remove(const std::vector<std::string>& package_names) {
-    initialize_package_database();
     load_installed_packages();
-    
-    for(const auto& pkg : package_names) {
-        if (package_database.find(pkg) == package_database.end()) {
-            std::cout << "Package not found: " << pkg << std::endl;
-            continue;
-        }
-        if (!package_database[pkg].installed) {
+    std::string cache_dir = get_package_cache_dir();
+    std::string root_dir = get_package_root_dir();
+
+    for (const auto& pkg : package_names) {
+        if (!installed_packages.count(pkg)) {
             std::cout << pkg << " is not installed." << std::endl;
             continue;
         }
-        // Check if any other package depends on this one
-        bool is_dependency = false;
-        for (const auto& [name, p] : package_database) {
-            if (p.installed && std::find(p.dependencies.begin(), p.dependencies.end(), pkg) != p.dependencies.end()) {
-                std::cout << pkg << " is required by installed package: " << name << std::endl;
-                is_dependency = true;
-                break;
+        // Read manifest
+        std::ifstream manifest(cache_dir + "/" + pkg + ".manifest");
+        if (!manifest.is_open()) {
+            std::cout << "Manifest not found for " << pkg << ". Skipping file removal." << std::endl;
+        } else {
+            std::string file;
+            while (std::getline(manifest, file)) {
+                std::filesystem::remove(root_dir + "/" + file);
             }
+            manifest.close();
+            std::filesystem::remove(cache_dir + "/" + pkg + ".manifest");
         }
-        if (is_dependency) continue;
-        if (!remove_package(pkg)) {
-            std::cout << "Failed to remove " << pkg << std::endl;
-        }
+        // Remove from installed packages
+        installed_packages.erase(pkg);
+        save_installed_packages();
+        std::cout << "Removed " << pkg << " successfully." << std::endl;
     }
 }
 
 void handle_search(const std::string& query) {
-    if (!load_repo_db()) return;
+    std::cout << "Searching for: " << query << std::endl;
+    if (!load_repo_db()) {
+        std::cout << "Failed to load repo database" << std::endl;
+        return;
+    }
+    std::cout << "Loaded repo database successfully" << std::endl;
+    
     auto& pkgs = repo_db["packages"];
+    std::cout << "Found " << pkgs.size() << " packages in database" << std::endl;
+    
     bool found = false;
     for (auto it = pkgs.begin(); it != pkgs.end(); ++it) {
         const auto& meta = it.value();
         std::string name = meta.value("name", "");
         std::string desc = meta.value("description", "");
+        std::cout << "Checking package: " << name << " - " << desc << std::endl;
         if (name.find(query) != std::string::npos || desc.find(query) != std::string::npos) {
             std::cout << name << " (" << meta.value("version", "") << ") - " << desc << std::endl;
             found = true;
