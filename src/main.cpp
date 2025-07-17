@@ -16,6 +16,9 @@
 #include <pwd.h>
 //Added this include
 #include "CLI/CLI.hpp"
+#include "nlohmann/json.hpp"
+
+using json = nlohmann::json;
 
 // Package database structure
 struct Package {
@@ -49,6 +52,7 @@ std::string get_package_install_dir();
 
 // Command handler function declarations
 void handle_install(const std::vector<std::string>& package_names);
+void handle_install_local(const std::string& package_file);
 void handle_remove(const std::vector<std::string>& package_names);
 void handle_search(const std::string& query);
 
@@ -60,6 +64,11 @@ int main(int argc, char** argv) {
     auto install_cmd = app.add_subcommand("install", "Install one or more packages.");
     std::vector<std::string> install_packages;
     install_cmd->add_option("packages", install_packages, "Names of the package(s) to install")->required();
+
+    // Install local command
+    auto install_local_cmd = app.add_subcommand("install-local", "Install a package from a local .fox file.");
+    std::string local_package_file;
+    install_local_cmd->add_option("package-file", local_package_file, "Path to local .fox package file")->required();
 
     // Remove command
     auto remove_cmd = app.add_subcommand("remove", "Remove one or more packages.");
@@ -80,6 +89,8 @@ int main(int argc, char** argv) {
     // Execute the correct command
     if (app.get_subcommand(install_cmd)) {
         handle_install(install_packages);
+    } else if (app.get_subcommand(install_local_cmd)) {
+        handle_install_local(local_package_file);
     } else if (app.get_subcommand(remove_cmd)) {
         handle_remove(remove_packages);
     } else if (app.get_subcommand(search_cmd)) {
@@ -270,13 +281,97 @@ void display_package_info(const Package& pkg) {
     std::cout << std::endl;
 }
 
+std::string get_package_root_dir() {
+    const char* home = getenv("HOME");
+    if (!home) {
+        struct passwd* pw = getpwuid(getuid());
+        home = pw ? pw->pw_dir : "/tmp";
+    }
+    return std::string(home) + "/.fox/root";
+}
+
+std::string get_temp_extract_dir() {
+    return "/tmp/fox-extract";
+}
+
+bool run_command(const std::string& cmd) {
+    int ret = system(cmd.c_str());
+    return (ret == 0);
+}
+
+bool real_download_package(const std::string& package_name, const std::string& url_base) {
+    std::string cache_dir = get_package_cache_dir();
+    std::string package_file = cache_dir + "/" + package_name + ".fox";
+    std::string url = url_base + "/" + package_name + ".fox";
+    std::cout << "Downloading " << url << "... ";
+    std::cout.flush();
+    std::string cmd = "curl -fsSL -o '" + package_file + "' '" + url + "'";
+    if (!run_command(cmd)) {
+        std::cout << "failed." << std::endl;
+        return false;
+    }
+    std::cout << "done." << std::endl;
+    return true;
+}
+
+bool real_extract_package(const std::string& package_file, const std::string& extract_dir) {
+    std::filesystem::remove_all(extract_dir);
+    std::filesystem::create_directories(extract_dir);
+    std::string cmd = "tar -xJf '" + package_file + "' -C '" + extract_dir + "'";
+    return run_command(cmd);
+}
+
+bool parse_fox_json(const std::string& extract_dir, json& fox_meta) {
+    std::ifstream fox_json_file(extract_dir + "/fox.json");
+    if (!fox_json_file.is_open()) return false;
+    fox_json_file >> fox_meta;
+    return true;
+}
+
+bool real_install_package(const std::string& package_name, const std::string& url_base) {
+    std::string cache_dir = get_package_cache_dir();
+    std::string package_file = cache_dir + "/" + package_name + ".fox";
+    std::string extract_dir = get_temp_extract_dir();
+    std::string root_dir = get_package_root_dir();
+
+    if (!real_extract_package(package_file, extract_dir)) {
+        std::cout << "Extraction failed." << std::endl;
+        return false;
+    }
+    // Parse fox.json
+    json fox_meta;
+    if (!parse_fox_json(extract_dir, fox_meta)) {
+        std::cout << "Missing or invalid fox.json." << std::endl;
+        return false;
+    }
+    // Copy files to root_dir (simulate system root)
+    std::string copy_cmd = "cp -a '" + extract_dir + "/.' '" + root_dir + "'";
+    if (!run_command(copy_cmd)) {
+        std::cout << "Failed to copy files." << std::endl;
+        return false;
+    }
+    // Track installed files
+    std::ofstream manifest(cache_dir + "/" + package_name + ".manifest");
+    for (auto& p : std::filesystem::recursive_directory_iterator(extract_dir)) {
+        if (p.is_regular_file()) {
+            manifest << std::filesystem::relative(p.path(), extract_dir) << std::endl;
+        }
+    }
+    manifest.close();
+    installed_packages.insert(package_name);
+    package_database[package_name].installed = true;
+    save_installed_packages();
+    std::cout << "Installed " << package_name << " successfully." << std::endl;
+    return true;
+}
+
 // --- Command Implementations ---
 
 void handle_install(const std::vector<std::string>& package_names) {
     initialize_package_database();
     load_installed_packages();
     create_package_directories();
-    
+    std::string url_base = "https://example.com/foxpkgs"; // TODO: set real repo URL
     for(const auto& pkg : package_names) {
         if (package_database.find(pkg) == package_database.end()) {
             std::cout << "Package not found: " << pkg << std::endl;
@@ -286,20 +381,84 @@ void handle_install(const std::vector<std::string>& package_names) {
             std::cout << pkg << " is already installed." << std::endl;
             continue;
         }
-        // Check dependencies
         if (!check_dependencies(package_database[pkg].dependencies)) {
             std::cout << "Cannot install " << pkg << " due to missing dependencies." << std::endl;
             continue;
         }
-        if (!download_package(pkg)) {
+        if (!real_download_package(pkg, url_base)) {
             std::cout << "Failed to download " << pkg << std::endl;
             continue;
         }
-        if (!install_package(pkg)) {
+        if (!real_install_package(pkg, url_base)) {
             std::cout << "Failed to install " << pkg << std::endl;
             continue;
         }
     }
+}
+
+void handle_install_local(const std::string& package_file) {
+    if (!std::filesystem::exists(package_file)) {
+        std::cout << "Package file not found: " << package_file << std::endl;
+        return;
+    }
+
+    std::cout << "Installing local package from " << package_file << "..." << std::endl;
+
+    std::string extract_dir = get_temp_extract_dir();
+    std::string root_dir = get_package_root_dir();
+    
+    // Extract the package
+    if (!real_extract_package(package_file, extract_dir)) {
+        std::cout << "Failed to extract package." << std::endl;
+        return;
+    }
+
+    // Parse fox.json to get package name
+    json fox_meta;
+    if (!parse_fox_json(extract_dir, fox_meta)) {
+        std::cout << "Missing or invalid fox.json in package." << std::endl;
+        return;
+    }
+
+    std::string package_name = fox_meta["name"];
+    std::cout << "Package name: " << package_name << std::endl;
+
+    // Copy files to root directory
+    std::string copy_cmd = "cp -a '" + extract_dir + "/.' '" + root_dir + "'";
+    if (!run_command(copy_cmd)) {
+        std::cout << "Failed to copy files to installation directory." << std::endl;
+        return;
+    }
+
+    // Track installed files
+    std::string cache_dir = get_package_cache_dir();
+    std::ofstream manifest(cache_dir + "/" + package_name + ".manifest");
+    for (auto& p : std::filesystem::recursive_directory_iterator(extract_dir)) {
+        if (p.is_regular_file()) {
+            manifest << std::filesystem::relative(p.path(), extract_dir) << std::endl;
+        }
+    }
+    manifest.close();
+
+    // Update package database
+    load_installed_packages();
+    installed_packages.insert(package_name);
+    if (package_database.find(package_name) == package_database.end()) {
+        package_database[package_name] = {
+            package_name,
+            fox_meta.value("version", "unknown"),
+            fox_meta.value("description", ""),
+            fox_meta.value("dependencies", std::vector<std::string>{}),
+            fox_meta.value("maintainer", ""),
+            fox_meta.value("license", ""),
+            true
+        };
+    } else {
+        package_database[package_name].installed = true;
+    }
+    save_installed_packages();
+
+    std::cout << "Successfully installed " << package_name << "!" << std::endl;
 }
 
 void handle_remove(const std::vector<std::string>& package_names) {

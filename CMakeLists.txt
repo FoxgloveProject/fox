@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Add a target for the main executable
 add_executable(fox src/main.cpp)
+target_include_directories(fox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # --- Dependencies ---
 # We will use FetchContent to get CLI11 for argument parsing.

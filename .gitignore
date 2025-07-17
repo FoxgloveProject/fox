@@ -23,3 +23,8 @@ Makefile
 *.sln
 *.vcxproj
 *.vcxproj.filters
+
+# Ignore test packages
+*.fox
+package-files/
+test-*/
