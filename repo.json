@@ -1,0 +1,44 @@
+{
+  "packages": {
+    "test-app": {
+      "name": "test-app",
+      "version": "1.0.0",
+      "description": "A sample package for testing fox package manager",
+      "arch": "x86_64",
+      "license": "MIT",
+      "dependencies": [],
+      "maintainer": "Foxglove Maintainers <contact@foxglove.org>",
+      "url": "https://yourserver.com/test-app.fox"
+    },
+    "vim": {
+      "name": "vim",
+      "version": "8.2",
+      "description": "Text editor",
+      "arch": "x86_64",
+      "license": "Vim",
+      "dependencies": [],
+      "maintainer": "Bram Moolenaar",
+      "url": "https://yourserver.com/vim.fox"
+    },
+    "firefox": {
+      "name": "firefox",
+      "version": "1.0.0",
+      "description": "Web browser",
+      "arch": "x86_64",
+      "license": "MPL-2.0",
+      "dependencies": ["gtk"],
+      "maintainer": "Mozilla",
+      "url": "https://yourserver.com/firefox.fox"
+    },
+    "gtk": {
+      "name": "gtk",
+      "version": "3.24",
+      "description": "GUI toolkit",
+      "arch": "x86_64",
+      "license": "LGPL-2.1",
+      "dependencies": [],
+      "maintainer": "GNOME",
+      "url": "https://yourserver.com/gtk.fox"
+    }
+  }
+} 

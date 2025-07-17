@@ -365,31 +365,64 @@ bool real_install_package(const std::string& package_name, const std::string& ur
     return true;
 }
 
+// Path to the package database (repo.json)
+std::string get_repo_db_path() {
+    // For now, use the project root; in production, use ~/.fox/repo.json
+    return "repo.json";
+}
+
+// Global package database loaded from repo.json
+json repo_db;
+
+// Load the package database from repo.json
+bool load_repo_db() {
+    std::ifstream repo_file(get_repo_db_path());
+    if (!repo_file.is_open()) {
+        std::cout << "Could not open repo.json!" << std::endl;
+        return false;
+    }
+    repo_file >> repo_db;
+    return true;
+}
+
 // --- Command Implementations ---
 
 void handle_install(const std::vector<std::string>& package_names) {
-    initialize_package_database();
+    if (!load_repo_db()) return;
     load_installed_packages();
     create_package_directories();
-    std::string url_base = "https://example.com/foxpkgs"; // TODO: set real repo URL
     for(const auto& pkg : package_names) {
-        if (package_database.find(pkg) == package_database.end()) {
+        if (!repo_db["packages"].contains(pkg)) {
             std::cout << "Package not found: " << pkg << std::endl;
             continue;
         }
-        if (package_database[pkg].installed) {
+        auto meta = repo_db["packages"][pkg];
+        if (installed_packages.count(pkg)) {
             std::cout << pkg << " is already installed." << std::endl;
             continue;
         }
-        if (!check_dependencies(package_database[pkg].dependencies)) {
+        // Check dependencies
+        bool deps_ok = true;
+        for (const auto& dep : meta["dependencies"]) {
+            if (!installed_packages.count(dep)) {
+                std::cout << "Missing dependency: " << dep << std::endl;
+                deps_ok = false;
+            }
+        }
+        if (!deps_ok) {
             std::cout << "Cannot install " << pkg << " due to missing dependencies." << std::endl;
             continue;
         }
-        if (!real_download_package(pkg, url_base)) {
+        std::string url = meta.value("url", "");
+        if (url.empty()) {
+            std::cout << "No download URL for " << pkg << std::endl;
+            continue;
+        }
+        if (!real_download_package(pkg, url.substr(0, url.find_last_of('/')))) {
             std::cout << "Failed to download " << pkg << std::endl;
             continue;
         }
-        if (!real_install_package(pkg, url_base)) {
+        if (!real_install_package(pkg, url.substr(0, url.find_last_of('/')))) {
             std::cout << "Failed to install " << pkg << std::endl;
             continue;
         }
@@ -491,15 +524,19 @@ void handle_remove(const std::vector<std::string>& package_names) {
 }
 
 void handle_search(const std::string& query) {
-    initialize_package_database();
-    load_installed_packages();
-    auto results = search_packages(query);
-    if (results.empty()) {
-        std::cout << "No packages found matching '" << query << "'." << std::endl;
-    } else {
-        std::cout << "Search results for '" << query << "':" << std::endl;
-        for (const auto& pkg : results) {
-            display_package_info(pkg);
+    if (!load_repo_db()) return;
+    auto& pkgs = repo_db["packages"];
+    bool found = false;
+    for (auto it = pkgs.begin(); it != pkgs.end(); ++it) {
+        const auto& meta = it.value();
+        std::string name = meta.value("name", "");
+        std::string desc = meta.value("description", "");
+        if (name.find(query) != std::string::npos || desc.find(query) != std::string::npos) {
+            std::cout << name << " (" << meta.value("version", "") << ") - " << desc << std::endl;
+            found = true;
         }
+    }
+    if (!found) {
+        std::cout << "No packages found matching '" << query << "'." << std::endl;
     }
 }
